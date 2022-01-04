@@ -23,6 +23,7 @@ import { version } from "./_version";
 const logger = new Logger(version);
 
 import { Formatter } from "./formatter";
+import { formatsByCoinType } from "@ensdomains/address-encoder";
 
 //////////////////////////////
 // Event Serializeing
@@ -210,24 +211,6 @@ export interface EnsProvider {
     getResolver(name: string): Promise<null | EnsResolver>;
 }
 
-type CoinInfo = {
-    symbol: string,
-    ilk?: string,     // General family
-    prefix?: string,  // Bech32 prefix
-    p2pkh?: number,   // Pay-to-Public-Key-Hash Version
-    p2sh?: number,    // Pay-to-Script-Hash Version
-};
-
-// https://github.com/satoshilabs/slips/blob/master/slip-0044.md
-const coinInfos: { [ coinType: string ]: CoinInfo } = {
-    "0":   { symbol: "btc",  p2pkh: 0x00, p2sh: 0x05, prefix: "bc" },
-    "2":   { symbol: "ltc",  p2pkh: 0x30, p2sh: 0x32, prefix: "ltc" },
-    "3":   { symbol: "doge", p2pkh: 0x1e, p2sh: 0x16 },
-    "60":  { symbol: "eth",  ilk: "eth" },
-    "61":  { symbol: "etc",  ilk: "eth" },
-    "700": { symbol: "xdai", ilk: "eth" },
-};
-
 function bytes32ify(value: number): string {
     return hexZeroPad(BigNumber.from(value).toHexString(), 32);
 }
@@ -301,68 +284,6 @@ export class Resolver implements EnsResolver {
         }
     }
 
-    _getAddress(coinType: number, hexBytes: string): string {
-        const coinInfo = coinInfos[String(coinType)];
-
-        if (coinInfo == null) {
-            logger.throwError(`unsupported coin type: ${ coinType }`, Logger.errors.UNSUPPORTED_OPERATION, {
-                operation: `getAddress(${ coinType })`
-            });
-        }
-
-        if (coinInfo.ilk === "eth") {
-            return this.provider.formatter.address(hexBytes);
-        }
-
-        const bytes = arrayify(hexBytes);
-
-        // P2PKH: OP_DUP OP_HASH160 <pubKeyHash> OP_EQUALVERIFY OP_CHECKSIG
-        if (coinInfo.p2pkh != null) {
-            const p2pkh = hexBytes.match(/^0x76a9([0-9a-f][0-9a-f])([0-9a-f]*)88ac$/);
-            if (p2pkh) {
-                const length = parseInt(p2pkh[1], 16);
-                if (p2pkh[2].length === length * 2 && length >= 1 && length <= 75) {
-                    return base58Encode(concat([ [ coinInfo.p2pkh ], ("0x" + p2pkh[2]) ]));
-                }
-            }
-        }
-
-        // P2SH: OP_HASH160 <scriptHash> OP_EQUAL
-        if (coinInfo.p2sh != null) {
-            const p2sh = hexBytes.match(/^0xa9([0-9a-f][0-9a-f])([0-9a-f]*)87$/);
-            if (p2sh) {
-                const length = parseInt(p2sh[1], 16);
-                if (p2sh[2].length === length * 2 && length >= 1 && length <= 75) {
-                    return base58Encode(concat([ [ coinInfo.p2sh ], ("0x" + p2sh[2]) ]));
-                }
-            }
-        }
-
-        // Bech32
-        if (coinInfo.prefix != null) {
-            const length = bytes[1];
-
-            // https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki#witness-program
-            let version = bytes[0];
-            if (version === 0x00) {
-                if (length !== 20 && length !== 32) {
-                    version = -1;
-                }
-            } else {
-                version = -1;
-            }
-
-            if (version >= 0 && bytes.length === 2 + length && length >= 1 && length <= 75) {
-                const words = bech32.toWords(bytes.slice(2));
-                words.unshift(version);
-                return bech32.encode(coinInfo.prefix, words);
-            }
-        }
-
-        return null;
-    }
-
-
     async getAddress(coinType?: number): Promise<string> {
         if (coinType == null) { coinType = 60; }
 
@@ -393,7 +314,7 @@ export class Resolver implements EnsResolver {
         if (hexBytes == null || hexBytes === "0x") { return null; }
 
         // Compute the address
-        const address = this._getAddress(coinType, hexBytes);
+        const address = formatsByCoinType[coinType].encoder(Buffer.from(arrayify(hexBytes)));
 
         if (address == null) {
             logger.throwError(`invalid or unsupported coin data`, Logger.errors.UNSUPPORTED_OPERATION, {
