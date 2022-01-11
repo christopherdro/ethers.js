@@ -482,7 +482,17 @@ export class Resolver implements EnsResolver {
                         }
 
                         // Get the token metadata
-                        const metadata = await fetchJson(metadataUrl);
+                        const url = new URL(metadataUrl);
+                        let metadata = null;
+                        switch (url.protocol) {
+                            case "ipfs:":
+                                metadata = yield fetchJson(`https:/\/gateway.ipfs.io/ipfs/${url.pathname.substring(7)}`);
+                                break;
+                            case "http:":
+                            case "https:":
+                                metadata = yield fetchJson(metadataUrl);
+                        }
+
                         if (!metadata) { return null; }
                         linkage.push({ type: "metadata", content: JSON.stringify(metadata) });
 
@@ -490,7 +500,7 @@ export class Resolver implements EnsResolver {
                         let imageUrl = metadata.image;
                         if (typeof(imageUrl) !== "string") { return null; }
 
-                        if (imageUrl.match(/^(https:\/\/|data:)/i)) {
+                        if (!metadata || typeof (metadata.image) !== "string" || !metadata.image.match(/^(https:\/\/|ipfs:\/\/|data:)/i)) {
                             // Allow
                         } else {
                             // Transform IPFS link to gateway
